@@ -2,5 +2,5 @@ streamlit
 pandas
 nltk
 spacy
+pymupdf
 python-docx
-pdfminer.six
