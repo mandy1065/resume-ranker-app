@@ -18,34 +18,18 @@ from pyresparser import ResumeParser
 st.set_page_config(page_title="AI Resume Ranker", layout="wide")
 st.title("🎯 End-to-End Talent Evaluation & Interview Outreach Tool")
 
-# ---------- Step 1: Upload Job Descriptions ----------
-st.header("1️⃣ Upload Job Descriptions")
-job_files = st.file_uploader("Upload Job Descriptions (TXT format)", type=["txt"], accept_multiple_files=True)
+# ---------- Step 1: Paste Job Description ----------
+st.header("1️⃣ Paste Job Description")
+job_title = st.text_input("Job Title", placeholder="e.g. Data Analyst")
+job_description = st.text_area("Paste Job Description", height=200)
 
-job_map = {}
-if job_files:
-    for job_file in job_files:
-        job_text = job_file.read().decode("utf-8")
-        job_title = job_file.name.replace(".txt", "")
-        job_map[job_title] = {"description": job_text, "resumes": []}
-    st.success(f"Uploaded {len(job_files)} job description(s).")
-else:
-    st.info("Please upload at least one job description to continue.")
-
-# ---------- Step 2: Upload Resumes for Each Job ----------
-st.header("2️⃣ Upload Resumes for Each Job")
-if job_map:
-    for job_title in job_map:
-        st.subheader(f"📌 {job_title}")
-        resumes = st.file_uploader(
-            f"Upload resumes for '{job_title}'", 
-            type=["pdf", "docx"], 
-            accept_multiple_files=True, 
-            key=job_title
-        )
-        job_map[job_title]["resumes"] = resumes
-else:
-    st.warning("Job descriptions required before resume uploads.")
+# ---------- Step 2: Upload Resumes ----------
+st.header("2️⃣ Upload Resumes")
+resumes = st.file_uploader(
+    "Upload multiple resumes (PDF or DOCX)", 
+    type=["pdf", "docx"], 
+    accept_multiple_files=True
+)
 
 # ---------- Helper: OAATS Scoring ----------
 def score_resume(parsed, job_keywords, min_experience=3):
@@ -60,19 +44,18 @@ def score_resume(parsed, job_keywords, min_experience=3):
     final_score = round((skills_match * 0.5 + exp_score * 0.3 + edu_score * 0.2), 2)
     return final_score, skills_match, exp_score, edu_score
 
-# ---------- Step 3: Analyze Resumes ----------
+# ---------- Step 3: Analyze & Rank ----------
 st.header("3️⃣ Analyze & Rank Candidates")
-all_results = []
+results = []
 
 if st.button("🚀 Analyze All"):
-    for job_title, job_data in job_map.items():
-        resumes = job_data.get("resumes", [])
-        if not resumes:
-            st.warning(f"No resumes uploaded for: {job_title}")
-            continue
-
+    if not job_description or not job_title:
+        st.warning("Please provide a job title and description.")
+    elif not resumes:
+        st.warning("Please upload at least one resume.")
+    else:
         st.markdown(f"### 🧾 Results for: {job_title}")
-        job_keywords = list(set(job_data["description"].lower().split()))
+        job_keywords = list(set(job_description.lower().split()))
 
         result_rows = []
         for resume_file in resumes:
@@ -84,7 +67,6 @@ if st.button("🚀 Analyze All"):
                 parsed = ResumeParser(tmp_path).get_extracted_data()
                 score, skills_pct, exp_pct, edu_pct = score_resume(parsed, job_keywords)
                 result_rows.append({
-                    "Job Title": job_title,
                     "Candidate": parsed.get("name", resume_file.name),
                     "Email": parsed.get("email", ""),
                     "Location": parsed.get("location", ""),
@@ -103,8 +85,8 @@ if st.button("🚀 Analyze All"):
 
         df_result = pd.DataFrame(result_rows)
         st.dataframe(df_result, use_container_width=True)
-        st.download_button(f"📥 Download {job_title} Results", df_result.to_csv(index=False), f"{job_title}_results.csv", "text/csv")
-        all_results.extend(result_rows)
+        st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
+        results = result_rows
 
 # ---------- Step 4: Send Email ----------
 st.header("4️⃣ Interview Email Sender")
@@ -115,8 +97,8 @@ email_provider = st.selectbox("Email Provider", ["Gmail", "Outlook"])
 smtp_server = "smtp.gmail.com" if email_provider == "Gmail" else "smtp.office365.com"
 smtp_port = 587
 
-if all_results:
-    df_all = pd.DataFrame(all_results)
+if results:
+    df_all = pd.DataFrame(results)
     selected_name = st.selectbox("Select Candidate to Email", df_all["Candidate"].unique())
     candidate_row = df_all[df_all["Candidate"] == selected_name].iloc[0]
 
@@ -124,7 +106,7 @@ if all_results:
     default_message = f"""
 Hi {candidate_row['Candidate']},
 
-Thank you for applying for the {candidate_row['Job Title']} position.
+Thank you for applying for the {job_title} position.
 
 We’d like to invite you to the next round of interviews. Please let us know your availability this week.
 
@@ -137,7 +119,7 @@ Best regards,
     if st.button("📤 Send Email"):
         try:
             msg = MIMEText(email_body)
-            msg["Subject"] = f"Interview Invitation - {candidate_row['Job Title']}"
+            msg["Subject"] = f"Interview Invitation - {job_title}"
             msg["From"] = sender_email
             msg["To"] = candidate_row["Email"]
 
