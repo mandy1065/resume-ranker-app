@@ -5,6 +5,7 @@ nltk.download('stopwords')
 nltk.download('wordnet')
 nltk.download('maxent_ne_chunker')
 nltk.download('words')
+
 import streamlit as st
 import pandas as pd
 import os
@@ -22,17 +23,29 @@ st.header("1️⃣ Upload Job Descriptions")
 job_files = st.file_uploader("Upload Job Descriptions (TXT format)", type=["txt"], accept_multiple_files=True)
 
 job_map = {}
-for job_file in job_files:
-    job_text = job_file.read().decode("utf-8")
-    job_title = job_file.name.replace(".txt", "")
-    job_map[job_title] = {"description": job_text, "resumes": []}
+if job_files:
+    for job_file in job_files:
+        job_text = job_file.read().decode("utf-8")
+        job_title = job_file.name.replace(".txt", "")
+        job_map[job_title] = {"description": job_text, "resumes": []}
+    st.success(f"Uploaded {len(job_files)} job description(s).")
+else:
+    st.info("Please upload at least one job description to continue.")
 
 # ---------- Step 2: Upload Resumes for Each Job ----------
 st.header("2️⃣ Upload Resumes for Each Job")
-for job_title in job_map:
-    st.subheader(f"📌 {job_title}")
-    resumes = st.file_uploader(f"Upload resumes for '{job_title}'", type=["pdf", "docx"], accept_multiple_files=True, key=job_title)
-    job_map[job_title]["resumes"] = resumes
+if job_map:
+    for job_title in job_map:
+        st.subheader(f"📌 {job_title}")
+        resumes = st.file_uploader(
+            f"Upload resumes for '{job_title}'", 
+            type=["pdf", "docx"], 
+            accept_multiple_files=True, 
+            key=job_title
+        )
+        job_map[job_title]["resumes"] = resumes
+else:
+    st.warning("Job descriptions required before resume uploads.")
 
 # ---------- Helper: OAATS Scoring ----------
 def score_resume(parsed, job_keywords, min_experience=3):
@@ -50,11 +63,14 @@ def score_resume(parsed, job_keywords, min_experience=3):
 # ---------- Step 3: Analyze Resumes ----------
 st.header("3️⃣ Analyze & Rank Candidates")
 all_results = []
+
 if st.button("🚀 Analyze All"):
     for job_title, job_data in job_map.items():
-        resumes = job_data["resumes"]
+        resumes = job_data.get("resumes", [])
         if not resumes:
+            st.warning(f"No resumes uploaded for: {job_title}")
             continue
+
         st.markdown(f"### 🧾 Results for: {job_title}")
         job_keywords = list(set(job_data["description"].lower().split()))
 
