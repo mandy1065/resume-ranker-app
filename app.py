@@ -1,34 +1,34 @@
-import nltk
 import streamlit as st
 import pandas as pd
-import os
-import tempfile
-import smtplib
+import nltk
 import spacy
 import fitz  # PyMuPDF
 from docx import Document
+import tempfile
+import os
+import smtplib
 from email.mime.text import MIMEText
 
-# Downloads required by NLTK
+# NLTK setup
 nltk.download('stopwords')
 
-# Load SpaCy model (must be preinstalled in build)
+# Load SpaCy model
 nlp = spacy.load("en_core_web_sm")
 
-# ---------- Streamlit Setup ----------
-st.set_page_config(page_title="AI Resume Ranker", layout="wide")
-st.title("🎯 Resume Ranker & Email Tool")
+# Streamlit UI setup
+st.set_page_config(page_title="Resume Ranker", layout="wide")
+st.title("🎯 Resume Ranker & Interview Outreach")
 
-# ---------- Step 1: Paste Job Description ----------
-st.header("1️⃣ Paste Job Description")
-job_title = st.text_input("Job Title", placeholder="e.g. Data Analyst")
-job_description = st.text_area("Paste Job Description", height=200)
+# Job description input
+st.header("1️⃣ Job Description")
+job_title = st.text_input("Job Title")
+job_description = st.text_area("Paste the job description", height=200)
 
-# ---------- Step 2: Upload Resumes ----------
+# Resume upload
 st.header("2️⃣ Upload Resumes")
-resumes = st.file_uploader("Upload Resumes (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
+resumes = st.file_uploader("Upload PDF or DOCX resumes", type=["pdf", "docx"], accept_multiple_files=True)
 
-# ---------- Resume Parser ----------
+# Helper functions
 def extract_text(file_path):
     if file_path.endswith(".pdf"):
         doc = fitz.open(file_path)
@@ -51,7 +51,6 @@ def parse_resume(file_path):
         "experience": 3  # Placeholder
     }
 
-# ---------- OAATS Scoring ----------
 def score_resume(parsed, job_keywords, min_experience=3):
     skills = parsed.get("skills", [])
     experience = parsed.get("experience", 0)
@@ -64,28 +63,25 @@ def score_resume(parsed, job_keywords, min_experience=3):
     final_score = round((skills_match * 0.5 + exp_score * 0.3 + edu_score * 0.2), 2)
     return final_score, skills_match, exp_score, edu_score
 
-# ---------- Step 3: Analyze ----------
+# Analyze resumes
 st.header("3️⃣ Analyze Candidates")
 results = []
 
 if st.button("🚀 Analyze"):
     if not job_description or not job_title:
-        st.warning("Please provide job title and description.")
+        st.warning("Please enter a job title and description.")
     elif not resumes:
         st.warning("Please upload at least one resume.")
     else:
         job_keywords = list(set(job_description.lower().split()))
-        result_rows = []
-
-        for resume_file in resumes:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf" if resume_file.name.endswith(".pdf") else ".docx") as tmp_file:
-                tmp_file.write(resume_file.read())
-                tmp_path = tmp_file.name
-
+        for resume in resumes:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf" if resume.name.endswith(".pdf") else ".docx") as tmp:
+                tmp.write(resume.read())
+                tmp_path = tmp.name
             try:
                 parsed = parse_resume(tmp_path)
                 score, skills_pct, exp_pct, edu_pct = score_resume(parsed, job_keywords)
-                result_rows.append({
+                results.append({
                     "Candidate": parsed["name"],
                     "Email": parsed["email"],
                     "Location": parsed["location"],
@@ -98,55 +94,51 @@ if st.button("🚀 Analyze"):
                     "OAATS Score": score
                 })
             except Exception as e:
-                st.error(f"❌ Error parsing {resume_file.name}: {e}")
+                st.error(f"❌ Error parsing {resume.name}: {e}")
             finally:
                 os.unlink(tmp_path)
 
-        df_result = pd.DataFrame(result_rows)
-        st.dataframe(df_result, use_container_width=True)
-        st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
-        results = result_rows
+        df_result = pd.DataFrame(results)
+        st.dataframe(df_result)
+        st.download_button("📥 Download Results", df_result.to_csv(index=False), "results.csv", "text/csv")
 
-# ---------- Step 4: Send Interview Email ----------
-st.header("4️⃣ Interview Email Sender")
-sender_email = st.text_input("Your Email Address", placeholder="you@gmail.com")
-sender_password = st.text_input("App Password (Gmail/Outlook)", type="password")
-email_provider = st.selectbox("Email Provider", ["Gmail", "Outlook"])
-smtp_server = "smtp.gmail.com" if email_provider == "Gmail" else "smtp.office365.com"
+# Email sender
+st.header("4️⃣ Send Interview Email")
+sender_email = st.text_input("Your Email", placeholder="you@gmail.com")
+sender_password = st.text_input("App Password", type="password")
+provider = st.selectbox("Email Provider", ["Gmail", "Outlook"])
+smtp_server = "smtp.gmail.com" if provider == "Gmail" else "smtp.office365.com"
 smtp_port = 587
 
 if results:
-    df_all = pd.DataFrame(results)
-    selected_name = st.selectbox("Select Candidate to Email", df_all["Candidate"].unique())
-    candidate_row = df_all[df_all["Candidate"] == selected_name].iloc[0]
+    selected = st.selectbox("Select Candidate", [r["Candidate"] for r in results])
+    candidate = next(r for r in results if r["Candidate"] == selected)
 
-    st.subheader("📨 Compose Interview Message")
-    default_message = f"""
-Hi {candidate_row['Candidate']},
+    default_msg = f"""
+Hi {candidate['Candidate']},
 
-Thank you for applying for the {job_title} position.
+Thanks for applying to the {job_title} role.
+We’d like to invite you to an interview.
 
-We’d like to invite you to the next round of interviews. Please let us know your availability this week.
-
-Best regards,  
+Regards,
 [Your Name]
-    """.strip()
-    email_body = st.text_area("Email Body", value=default_message, height=200)
+""".strip()
 
+    message = st.text_area("Compose Email", default_msg, height=200)
     if st.button("📤 Send Email"):
         try:
-            msg = MIMEText(email_body)
+            msg = MIMEText(message)
             msg["Subject"] = f"Interview Invitation - {job_title}"
             msg["From"] = sender_email
-            msg["To"] = candidate_row["Email"]
+            msg["To"] = candidate["Email"]
 
             with smtplib.SMTP(smtp_server, smtp_port) as server:
                 server.starttls()
                 server.login(sender_email, sender_password)
-                server.sendmail(sender_email, candidate_row["Email"], msg.as_string())
+                server.sendmail(sender_email, candidate["Email"], msg.as_string())
 
-            st.success(f"✅ Email sent to {candidate_row['Candidate']} at {candidate_row['Email']}")
+            st.success(f"✅ Email sent to {candidate['Candidate']} at {candidate['Email']}")
         except Exception as e:
             st.error(f"❌ Failed to send email: {e}")
 else:
-    st.info("Analyze candidates before sending email.")
+    st.info("Analyze resumes to enable this feature.")
