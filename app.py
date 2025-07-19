@@ -5,6 +5,7 @@ import tempfile
 import re
 import pdfplumber
 from docx import Document
+from fuzzywuzzy import fuzz
 
 # Sample skill keywords list (expand as needed)
 SKILL_KEYWORDS = ["python", "sql", "excel", "aws", "machine learning", "java", "c++", "javascript", "react", "testing", "automation"]
@@ -54,17 +55,39 @@ def parse_resume(file_path):
     }
 
 # ---------- Scoring ----------
+
+
 def score_resume(parsed, job_keywords, min_experience=3):
-    skills = parsed["skills"]
-    experience = parsed["experience"]
-    edu = parsed["education"]
+    skills = parsed.get("skills", [])
+    experience = parsed.get("experience", 0)
+    education = parsed.get("education", "")
 
-    skills_match = len(set(skills).intersection(set(job_keywords))) / len(job_keywords) * 100 if job_keywords else 0
+    # Normalize all words to lowercase
+    skills = [s.lower() for s in skills]
+    job_keywords = [k.lower() for k in job_keywords]
+
+    # Fuzzy skill match
+    match_score = 0
+    for skill in skills:
+        for keyword in job_keywords:
+            ratio = fuzz.partial_ratio(skill, keyword)
+            if ratio > 80:
+                match_score += 1
+                break
+
+    skills_match_pct = (match_score / len(job_keywords)) * 100 if job_keywords else 0
+
+    # Experience score
     exp_score = min((experience / min_experience) * 100, 100)
-    edu_score = 100 if edu else 50
 
-    final_score = round((skills_match * 0.5 + exp_score * 0.3 + edu_score * 0.2), 2)
-    return final_score, skills_match, exp_score, edu_score
+    # Education scoring: prefer Bachelor or higher
+    edu_score = 100 if "bachelor" in education.lower() or "b.tech" in education.lower() else 50
+
+    # Weighted OAATS score
+    final_score = round((skills_match_pct * 0.6 + exp_score * 0.25 + edu_score * 0.15), 2)
+
+    return final_score, skills_match_pct, exp_score, edu_score
+
 
 # ---------- Step 3: Analyze ----------
 st.header("3️⃣ Analyze Candidates")
