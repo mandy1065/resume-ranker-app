@@ -2,5 +2,5 @@ streamlit
 pandas
 nltk
 spacy
-pymupdf
 python-docx
+PyMuPDF==1.22.3  # for `fitz` import
