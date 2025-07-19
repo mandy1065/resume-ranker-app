@@ -1,18 +1,18 @@
+import nltk
 import streamlit as st
 import pandas as pd
 import os
 import tempfile
-import re
-import pdfplumber
+import smtplib
 from docx import Document
+from email.mime.text import MIMEText
 from fuzzywuzzy import fuzz
 
-# Sample skill keywords list (expand as needed)
-SKILL_KEYWORDS = ["python", "sql", "excel", "aws", "machine learning", "java", "c++", "javascript", "react", "testing", "automation"]
+nltk.download('stopwords')
 
 # ---------- Streamlit Setup ----------
-st.set_page_config(page_title="Resume Ranker (No spaCy)", layout="wide")
-st.title("🎯 Resume Ranker Without spaCy")
+st.set_page_config(page_title="AI Resume Ranker", layout="wide")
+st.title("🎯 Resume Ranker & Email Tool")
 
 # ---------- Step 1: Paste Job Description ----------
 st.header("1️⃣ Paste Job Description")
@@ -23,71 +23,58 @@ job_description = st.text_area("Paste Job Description", height=200)
 st.header("2️⃣ Upload Resumes")
 resumes = st.file_uploader("Upload Resumes (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
 
-# ---------- Text Extraction ----------
-def extract_text_from_pdf(path):
-    with pdfplumber.open(path) as pdf:
-        return "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
-
-def extract_text_from_docx(path):
-    doc = Document(path)
-    return "\n".join(p.text for p in doc.paragraphs)
-
-# ---------- Simple Resume Parser ----------
-def parse_resume(file_path):
-    text = ""
+# ---------- Resume Parser ----------
+def extract_text(file_path):
     if file_path.endswith(".pdf"):
-        text = extract_text_from_pdf(file_path)
+        import fitz
+        doc = fitz.open(file_path)
+        return "\n".join([page.get_text() for page in doc])
     elif file_path.endswith(".docx"):
-        text = extract_text_from_docx(file_path)
+        doc = Document(file_path)
+        return "\n".join([p.text for p in doc.paragraphs])
+    return ""
 
-    email = re.search(r'[\w\.-]+@[\w\.-]+', text)
-    name = text.split("\n")[0] if text else "Unknown"
-    skills = [kw for kw in SKILL_KEYWORDS if kw.lower() in text.lower()]
-    location = re.search(r'\b(Toronto|Vancouver|New York|San Francisco|London|Delhi|Mumbai)\b', text, re.I)
+def parse_resume(file_path):
+    text = extract_text(file_path)
+    lines = text.split("\n")
+    name = lines[0].strip() if lines else os.path.basename(file_path)
+    email = next((line for line in lines if "@" in line and "." in line), "")
+    location = ""  # Could be improved with regex or LLM
+    skills = [word.strip().lower() for word in text.split() if len(word) > 2]
+    education = next((line for line in lines if "Bachelor" in line or "B.Tech" in line), "")
+    experience = 3  # Placeholder
 
     return {
         "name": name,
-        "email": email.group(0) if email else "",
-        "location": location.group(0) if location else "Unknown",
+        "email": email,
+        "location": location,
         "skills": list(set(skills)),
-        "education": "Bachelor" if "bachelor" in text.lower() else "",
-        "experience": 3  # Placeholder
+        "education": education,
+        "experience": experience
     }
 
-# ---------- Scoring ----------
-
-
+# ---------- Improved OAATS Scoring ----------
 def score_resume(parsed, job_keywords, min_experience=3):
     skills = parsed.get("skills", [])
     experience = parsed.get("experience", 0)
     education = parsed.get("education", "")
 
-    # Normalize all words to lowercase
     skills = [s.lower() for s in skills]
     job_keywords = [k.lower() for k in job_keywords]
 
-    # Fuzzy skill match
     match_score = 0
     for skill in skills:
         for keyword in job_keywords:
-            ratio = fuzz.partial_ratio(skill, keyword)
-            if ratio > 80:
+            if fuzz.partial_ratio(skill, keyword) > 80:
                 match_score += 1
                 break
 
     skills_match_pct = (match_score / len(job_keywords)) * 100 if job_keywords else 0
-
-    # Experience score
     exp_score = min((experience / min_experience) * 100, 100)
-
-    # Education scoring: prefer Bachelor or higher
     edu_score = 100 if "bachelor" in education.lower() or "b.tech" in education.lower() else 50
 
-    # Weighted OAATS score
     final_score = round((skills_match_pct * 0.6 + exp_score * 0.25 + edu_score * 0.15), 2)
-
     return final_score, skills_match_pct, exp_score, edu_score
-
 
 # ---------- Step 3: Analyze ----------
 st.header("3️⃣ Analyze Candidates")
@@ -131,3 +118,49 @@ if st.button("🚀 Analyze"):
         st.dataframe(df_result, use_container_width=True)
         st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
         results = result_rows
+
+# ---------- Step 4: Send Email ----------
+st.header("4️⃣ Interview Email Sender")
+sender_email = st.text_input("Your Email Address", placeholder="you@gmail.com")
+sender_password = st.text_input("App Password (Gmail/Outlook)", type="password")
+email_provider = st.selectbox("Email Provider", ["Gmail", "Outlook"])
+
+smtp_server = "smtp.gmail.com" if email_provider == "Gmail" else "smtp.office365.com"
+smtp_port = 587
+
+if results:
+    df_all = pd.DataFrame(results)
+    selected_name = st.selectbox("Select Candidate to Email", df_all["Candidate"].unique())
+    candidate_row = df_all[df_all["Candidate"] == selected_name].iloc[0]
+
+    st.subheader("📨 Compose Interview Message")
+    default_message = f"""
+Hi {candidate_row['Candidate']},
+
+Thank you for applying for the {job_title} position.
+
+We’d like to invite you to the next round of interviews. Please let us know your availability this week.
+
+Best regards,  
+[Your Name]
+    """.strip()
+
+    email_body = st.text_area("Email Body", value=default_message, height=200)
+
+    if st.button("📤 Send Email"):
+        try:
+            msg = MIMEText(email_body)
+            msg["Subject"] = f"Interview Invitation - {job_title}"
+            msg["From"] = sender_email
+            msg["To"] = candidate_row["Email"]
+
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(sender_email, sender_password)
+                server.sendmail(sender_email, candidate_row["Email"], msg.as_string())
+
+            st.success(f"✅ Email sent to {candidate_row['Candidate']} at {candidate_row['Email']}")
+        except Exception as e:
+            st.error(f"❌ Failed to send email: {e}")
+else:
+    st.info("Please analyze resumes first to enable email feature.")
