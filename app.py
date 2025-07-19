@@ -48,7 +48,7 @@ def parse_resume(file_path):
         "location": next((ent.text for ent in doc.ents if ent.label_ == "GPE"), ""),
         "skills": list(set(skills)),
         "education": [ent.text for ent in doc.ents if ent.label_ == "ORG"],
-        "experience": 3  # Placeholder — you can improve this with regex or LLM
+        "experience": 3  # Placeholder
     }
 
 # ---------- OAATS Scoring ----------
@@ -98,4 +98,55 @@ if st.button("🚀 Analyze"):
                     "OAATS Score": score
                 })
             except Exception as e:
-                st.error(f"❌ Error parsing {
+                st.error(f"❌ Error parsing {resume_file.name}: {e}")
+            finally:
+                os.unlink(tmp_path)
+
+        df_result = pd.DataFrame(result_rows)
+        st.dataframe(df_result, use_container_width=True)
+        st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
+        results = result_rows
+
+# ---------- Step 4: Send Interview Email ----------
+st.header("4️⃣ Interview Email Sender")
+sender_email = st.text_input("Your Email Address", placeholder="you@gmail.com")
+sender_password = st.text_input("App Password (Gmail/Outlook)", type="password")
+email_provider = st.selectbox("Email Provider", ["Gmail", "Outlook"])
+smtp_server = "smtp.gmail.com" if email_provider == "Gmail" else "smtp.office365.com"
+smtp_port = 587
+
+if results:
+    df_all = pd.DataFrame(results)
+    selected_name = st.selectbox("Select Candidate to Email", df_all["Candidate"].unique())
+    candidate_row = df_all[df_all["Candidate"] == selected_name].iloc[0]
+
+    st.subheader("📨 Compose Interview Message")
+    default_message = f"""
+Hi {candidate_row['Candidate']},
+
+Thank you for applying for the {job_title} position.
+
+We’d like to invite you to the next round of interviews. Please let us know your availability this week.
+
+Best regards,  
+[Your Name]
+    """.strip()
+    email_body = st.text_area("Email Body", value=default_message, height=200)
+
+    if st.button("📤 Send Email"):
+        try:
+            msg = MIMEText(email_body)
+            msg["Subject"] = f"Interview Invitation - {job_title}"
+            msg["From"] = sender_email
+            msg["To"] = candidate_row["Email"]
+
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(sender_email, sender_password)
+                server.sendmail(sender_email, candidate_row["Email"], msg.as_string())
+
+            st.success(f"✅ Email sent to {candidate_row['Candidate']} at {candidate_row['Email']}")
+        except Exception as e:
+            st.error(f"❌ Failed to send email: {e}")
+else:
+    st.info("Analyze candidates before sending email.")
