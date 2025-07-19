@@ -1,3 +1,10 @@
+import nltk
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('stopwords')
+nltk.download('wordnet')
+nltk.download('maxent_ne_chunker')
+nltk.download('words')
 import streamlit as st
 import pandas as pd
 import os
