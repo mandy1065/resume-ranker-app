@@ -1,13 +1,6 @@
 streamlit
 pandas
-pyresparser
 nltk
 spacy
+python-docx
 pdfminer.six
-python-docx
-streamlit
-spacy
-nltk
-pymupdf
-python-docx
-
