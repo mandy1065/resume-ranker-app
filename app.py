@@ -4,23 +4,24 @@ import pandas as pd
 import os
 import tempfile
 import smtplib
-import spacy
 import fitz  # PyMuPDF
 from docx import Document
 from email.mime.text import MIMEText
 
-# Downloads required for NLTK
+# ---------- NLTK Setup ----------
 nltk.download('stopwords')
 
-# Load spaCy model
+# ---------- Try loading spaCy model ----------
 try:
+    import spacy
     nlp = spacy.load("en_core_web_sm")
-except:
-    st.error("❌ spaCy model 'en_core_web_sm' not loaded. Check setup.sh.")
+except Exception as e:
+    nlp = None
+    st.error("❌ spaCy model 'en_core_web_sm' not loaded. Check if setup.sh ran correctly.")
 
 # ---------- Streamlit Setup ----------
 st.set_page_config(page_title="AI Resume Ranker", layout="wide")
-st.title("🎯 Resume Ranker & Interview Outreach Tool")
+st.title("🎯 Resume Ranker & Email Tool")
 
 # ---------- Step 1: Paste Job Description ----------
 st.header("1️⃣ Paste Job Description")
@@ -31,7 +32,7 @@ job_description = st.text_area("Paste Job Description", height=200)
 st.header("2️⃣ Upload Resumes")
 resumes = st.file_uploader("Upload Resumes (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
 
-# ---------- Helper: Resume Parser ----------
+# ---------- Resume Parser ----------
 def extract_text(file_path):
     if file_path.endswith(".pdf"):
         doc = fitz.open(file_path)
@@ -42,6 +43,8 @@ def extract_text(file_path):
     return ""
 
 def parse_resume(file_path):
+    if not nlp:
+        raise RuntimeError("spaCy model not loaded")
     text = extract_text(file_path)
     doc = nlp(text)
     skills = [token.text for token in doc if token.pos_ == "NOUN"]
@@ -51,10 +54,10 @@ def parse_resume(file_path):
         "location": next((ent.text for ent in doc.ents if ent.label_ == "GPE"), ""),
         "skills": list(set(skills)),
         "education": [ent.text for ent in doc.ents if ent.label_ == "ORG"],
-        "experience": 3  # Placeholder; can use regex or LLM later
+        "experience": 3  # Placeholder
     }
 
-# ---------- Helper: OAATS Scoring ----------
+# ---------- OAATS Scoring ----------
 def score_resume(parsed, job_keywords, min_experience=3):
     skills = parsed.get("skills", [])
     experience = parsed.get("experience", 0)
@@ -67,12 +70,14 @@ def score_resume(parsed, job_keywords, min_experience=3):
     final_score = round((skills_match * 0.5 + exp_score * 0.3 + edu_score * 0.2), 2)
     return final_score, skills_match, exp_score, edu_score
 
-# ---------- Step 3: Analyze Candidates ----------
+# ---------- Step 3: Analyze ----------
 st.header("3️⃣ Analyze Candidates")
 results = []
 
 if st.button("🚀 Analyze"):
-    if not job_description or not job_title:
+    if not nlp:
+        st.error("Cannot run analysis — spaCy model not available.")
+    elif not job_description or not job_title:
         st.warning("Please provide job title and description.")
     elif not resumes:
         st.warning("Please upload at least one resume.")
@@ -105,12 +110,13 @@ if st.button("🚀 Analyze"):
             finally:
                 os.unlink(tmp_path)
 
-        df_result = pd.DataFrame(result_rows)
-        st.dataframe(df_result, use_container_width=True)
-        st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
-        results = result_rows
+        if result_rows:
+            df_result = pd.DataFrame(result_rows)
+            st.dataframe(df_result, use_container_width=True)
+            st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
+            results = result_rows
 
-# ---------- Step 4: Send Interview Email ----------
+# ---------- Step 4: Email ----------
 st.header("4️⃣ Interview Email Sender")
 sender_email = st.text_input("Your Email Address", placeholder="you@gmail.com")
 sender_password = st.text_input("App Password (Gmail/Outlook)", type="password")
