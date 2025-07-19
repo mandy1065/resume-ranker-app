@@ -7,8 +7,10 @@ import smtplib
 from email.mime.text import MIMEText
 from docx import Document
 import fitz  # PyMuPDF
+from nltk.corpus import stopwords
 
 nltk.download('stopwords')
+stop_words = set(stopwords.words('english'))
 
 # ---------- Streamlit Setup ----------
 st.set_page_config(page_title="AI Resume Ranker", layout="wide")
@@ -25,7 +27,7 @@ resumes = st.file_uploader("Upload Resumes (PDF/DOCX)", type=["pdf", "docx"], ac
 
 # ---------- Skill Extractor from Job Description ----------
 def extract_job_skills(description):
-    words = [word.strip().lower() for word in description.split() if len(word) > 2 and word.isalpha()]
+    words = [word.strip().lower() for word in description.split() if word.lower() not in stop_words and word.isalpha() and len(word) > 2]
     return list(set(words))
 
 # ---------- Resume Text Extraction ----------
@@ -41,7 +43,7 @@ def extract_text(file_path):
 # ---------- Parse Resume ----------
 def parse_resume(file_path):
     text = extract_text(file_path).lower()
-    tokens = [word for word in text.split() if len(word) > 2 and word.isalpha()]
+    tokens = [word for word in text.split() if word.isalpha() and len(word) > 2 and word not in stop_words]
     skills = list(set(tokens))
     return {
         "name": os.path.basename(file_path),
