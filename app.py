@@ -5,7 +5,6 @@ nltk.download('stopwords')
 nltk.download('wordnet')
 nltk.download('maxent_ne_chunker')
 nltk.download('words')
-
 import streamlit as st
 import pandas as pd
 import os
@@ -13,6 +12,12 @@ import tempfile
 import smtplib
 from email.mime.text import MIMEText
 from pyresparser import ResumeParser
+import spacy
+import subprocess
+try:
+    spacy.load("en_core_web_sm")
+except OSError:
+    subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"])
 
 # ---------- Streamlit Setup ----------
 st.set_page_config(page_title="AI Resume Ranker", layout="wide")
