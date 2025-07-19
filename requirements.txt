@@ -2,3 +2,5 @@ streamlit
 pdfplumber
 python-docx
 pandas
+fuzzywuzzy
+python-Levenshtein
