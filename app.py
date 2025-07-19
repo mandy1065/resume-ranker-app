@@ -1,27 +1,17 @@
-import nltk
 import streamlit as st
 import pandas as pd
 import os
 import tempfile
-import smtplib
-import fitz  # PyMuPDF
+import re
+import pdfplumber
 from docx import Document
-from email.mime.text import MIMEText
 
-# ---------- NLTK Setup ----------
-nltk.download('stopwords')
-
-# ---------- Try loading spaCy model ----------
-try:
-    import spacy
-    nlp = spacy.load("en_core_web_sm")
-except Exception as e:
-    nlp = None
-    st.error("❌ spaCy model 'en_core_web_sm' not loaded. Check if setup.sh ran correctly.")
+# Sample skill keywords list (expand as needed)
+SKILL_KEYWORDS = ["python", "sql", "excel", "aws", "machine learning", "java", "c++", "javascript", "react", "testing", "automation"]
 
 # ---------- Streamlit Setup ----------
-st.set_page_config(page_title="AI Resume Ranker", layout="wide")
-st.title("🎯 Resume Ranker & Email Tool")
+st.set_page_config(page_title="Resume Ranker (No spaCy)", layout="wide")
+st.title("🎯 Resume Ranker Without spaCy")
 
 # ---------- Step 1: Paste Job Description ----------
 st.header("1️⃣ Paste Job Description")
@@ -32,40 +22,46 @@ job_description = st.text_area("Paste Job Description", height=200)
 st.header("2️⃣ Upload Resumes")
 resumes = st.file_uploader("Upload Resumes (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
 
-# ---------- Resume Parser ----------
-def extract_text(file_path):
-    if file_path.endswith(".pdf"):
-        doc = fitz.open(file_path)
-        return "\n".join([page.get_text() for page in doc])
-    elif file_path.endswith(".docx"):
-        doc = Document(file_path)
-        return "\n".join([p.text for p in doc.paragraphs])
-    return ""
+# ---------- Text Extraction ----------
+def extract_text_from_pdf(path):
+    with pdfplumber.open(path) as pdf:
+        return "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
 
+def extract_text_from_docx(path):
+    doc = Document(path)
+    return "\n".join(p.text for p in doc.paragraphs)
+
+# ---------- Simple Resume Parser ----------
 def parse_resume(file_path):
-    if not nlp:
-        raise RuntimeError("spaCy model not loaded")
-    text = extract_text(file_path)
-    doc = nlp(text)
-    skills = [token.text for token in doc if token.pos_ == "NOUN"]
+    text = ""
+    if file_path.endswith(".pdf"):
+        text = extract_text_from_pdf(file_path)
+    elif file_path.endswith(".docx"):
+        text = extract_text_from_docx(file_path)
+
+    email = re.search(r'[\w\.-]+@[\w\.-]+', text)
+    name = text.split("\n")[0] if text else "Unknown"
+    skills = [kw for kw in SKILL_KEYWORDS if kw.lower() in text.lower()]
+    location = re.search(r'\b(Toronto|Vancouver|New York|San Francisco|London|Delhi|Mumbai)\b', text, re.I)
+
     return {
-        "name": next((ent.text for ent in doc.ents if ent.label_ == "PERSON"), os.path.basename(file_path)),
-        "email": next((ent.text for ent in doc.ents if ent.label_ == "EMAIL"), ""),
-        "location": next((ent.text for ent in doc.ents if ent.label_ == "GPE"), ""),
+        "name": name,
+        "email": email.group(0) if email else "",
+        "location": location.group(0) if location else "Unknown",
         "skills": list(set(skills)),
-        "education": [ent.text for ent in doc.ents if ent.label_ == "ORG"],
+        "education": "Bachelor" if "bachelor" in text.lower() else "",
         "experience": 3  # Placeholder
     }
 
-# ---------- OAATS Scoring ----------
+# ---------- Scoring ----------
 def score_resume(parsed, job_keywords, min_experience=3):
-    skills = parsed.get("skills", [])
-    experience = parsed.get("experience", 0)
-    education = parsed.get("education", [])
+    skills = parsed["skills"]
+    experience = parsed["experience"]
+    edu = parsed["education"]
 
     skills_match = len(set(skills).intersection(set(job_keywords))) / len(job_keywords) * 100 if job_keywords else 0
     exp_score = min((experience / min_experience) * 100, 100)
-    edu_score = 100 if education else 50
+    edu_score = 100 if edu else 50
 
     final_score = round((skills_match * 0.5 + exp_score * 0.3 + edu_score * 0.2), 2)
     return final_score, skills_match, exp_score, edu_score
@@ -75,9 +71,7 @@ st.header("3️⃣ Analyze Candidates")
 results = []
 
 if st.button("🚀 Analyze"):
-    if not nlp:
-        st.error("Cannot run analysis — spaCy model not available.")
-    elif not job_description or not job_title:
+    if not job_description or not job_title:
         st.warning("Please provide job title and description.")
     elif not resumes:
         st.warning("Please upload at least one resume.")
@@ -98,7 +92,7 @@ if st.button("🚀 Analyze"):
                     "Email": parsed["email"],
                     "Location": parsed["location"],
                     "Experience (yrs)": parsed["experience"],
-                    "Education": ", ".join(parsed["education"]),
+                    "Education": parsed["education"],
                     "Skills": ", ".join(parsed["skills"]),
                     "Skill Match %": round(skills_pct, 2),
                     "Experience Score %": round(exp_pct, 2),
@@ -110,54 +104,7 @@ if st.button("🚀 Analyze"):
             finally:
                 os.unlink(tmp_path)
 
-        if result_rows:
-            df_result = pd.DataFrame(result_rows)
-            st.dataframe(df_result, use_container_width=True)
-            st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
-            results = result_rows
-
-# ---------- Step 4: Email ----------
-st.header("4️⃣ Interview Email Sender")
-sender_email = st.text_input("Your Email Address", placeholder="you@gmail.com")
-sender_password = st.text_input("App Password (Gmail/Outlook)", type="password")
-email_provider = st.selectbox("Email Provider", ["Gmail", "Outlook"])
-
-smtp_server = "smtp.gmail.com" if email_provider == "Gmail" else "smtp.office365.com"
-smtp_port = 587
-
-if results:
-    df_all = pd.DataFrame(results)
-    selected_name = st.selectbox("Select Candidate to Email", df_all["Candidate"].unique())
-    candidate_row = df_all[df_all["Candidate"] == selected_name].iloc[0]
-
-    st.subheader("📨 Compose Interview Message")
-    default_message = f"""
-Hi {candidate_row['Candidate']},
-
-Thank you for applying for the {job_title} position.
-
-We’d like to invite you to the next round of interviews. Please let us know your availability this week.
-
-Best regards,  
-[Your Name]
-    """.strip()
-
-    email_body = st.text_area("Email Body", value=default_message, height=200)
-
-    if st.button("📤 Send Email"):
-        try:
-            msg = MIMEText(email_body)
-            msg["Subject"] = f"Interview Invitation - {job_title}"
-            msg["From"] = sender_email
-            msg["To"] = candidate_row["Email"]
-
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(sender_email, sender_password)
-                server.sendmail(sender_email, candidate_row["Email"], msg.as_string())
-
-            st.success(f"✅ Email sent to {candidate_row['Candidate']} at {candidate_row['Email']}")
-        except Exception as e:
-            st.error(f"❌ Failed to send email: {e}")
-else:
-    st.info("Please analyze resumes first to enable email feature.")
+        df_result = pd.DataFrame(result_rows)
+        st.dataframe(df_result, use_container_width=True)
+        st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
+        results = result_rows
