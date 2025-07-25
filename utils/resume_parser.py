@@ -3,25 +3,28 @@ import tempfile
 from PyPDF2 import PdfReader
 
 def parse_resume(uploaded_file):
-    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        tmp_path = tmp_file.name
+    # Write to temp file
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(uploaded_file.read())
+        path = tmp.name
 
     text = ""
-    if uploaded_file.name.endswith(".pdf"):
-        reader = PdfReader(tmp_path)
+    name, _ = os.path.splitext(uploaded_file.name)
+    if uploaded_file.name.lower().endswith(".pdf"):
+        reader = PdfReader(path)
         for page in reader.pages:
-            text += page.extract_text()
-    elif uploaded_file.name.endswith(".docx"):
+            text += page.extract_text() or ""
+    else:
         import docx
-        doc = docx.Document(tmp_path)
-        text = "\n".join([para.text for para in doc.paragraphs])
+        doc = docx.Document(path)
+        text = "\n".join(p.text for p in doc.paragraphs)
 
-    os.remove(tmp_path)
+    os.remove(path)
 
+    # Basic parsing: Use filename as Name & create dummy email
     return {
-        "Name": "Unknown",
-        "Email": f"{uploaded_file.name.split('.')[0]}@example.com",
-        "Skills": "Python, Streamlit",
-        "Resume Text": text[:1000]
+        "Name": name,
+        "Email": f"{name.replace(' ', '.').lower()}@example.com",
+        "Skills": "N/A",
+        "Resume Text": text[:2000]  # preview
     }
