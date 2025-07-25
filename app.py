@@ -1,13 +1,13 @@
+# app.py
+
 import os
 import streamlit as st
 import pandas as pd
 from io import StringIO
 from utils.resume_parser import parse_resume
 
-
 # Ensure the data directory exists
 os.makedirs("data", exist_ok=True)
-
 
 st.set_page_config(page_title="Recruiter Portal", layout="wide")
 
@@ -18,10 +18,14 @@ except FileNotFoundError:
     jobs_df = pd.DataFrame(columns=["Title", "Description", "Location"])
     jobs_df.to_csv("data/jobs.csv", index=False)
 
+# — Load or initialize status with a Job column —
 try:
     status_df = pd.read_csv("data/status.csv")
+    # If you already had a CSV without Job, add an empty Job column
+    if "Job" not in status_df.columns:
+        status_df["Job"] = ""
 except FileNotFoundError:
-    status_df = pd.DataFrame(columns=["Email", "Status"])
+    status_df = pd.DataFrame(columns=["Email", "Status", "Job"])
     status_df.to_csv("data/status.csv", index=False)
 
 # — Sidebar navigation —
@@ -120,43 +124,46 @@ elif page == "Analyse & Email Candidates":
             accept_multiple_files=True
         )
 
-        if files:
-            if st.button("Analyse Resumes"):
-                parsed = [parse_resume(f) for f in files]
-                df = pd.DataFrame(parsed)
+        if files and st.button("Analyse Resumes"):
+            parsed = [parse_resume(f) for f in files]
+            df = pd.DataFrame(parsed)
 
-                # 3.3 Compute keyword-match score
-                keywords = set(job["Description"].lower().split())
-                df["Score"] = df["Resume Text"].apply(
-                    lambda txt: sum(txt.lower().count(k) for k in keywords)
-                )
-                df["Matched Keywords"] = df["Resume Text"].apply(
-                    lambda txt: [k for k in keywords if k in txt.lower()]
-                )
-                df = df.sort_values("Score", ascending=False)
+            # 3.3 Compute keyword-match score
+            keywords = set(job["Description"].lower().split())
+            df["Score"] = df["Resume Text"].apply(
+                lambda txt: sum(txt.lower().count(k) for k in keywords)
+            )
+            df["Matched Keywords"] = df["Resume Text"].apply(
+                lambda txt: [k for k in keywords if k in txt.lower()]
+            )
+            df = df.sort_values("Score", ascending=False)
 
-                # 3.4 Show ranking and useful info
-                st.subheader("Ranked Candidates")
-                st.dataframe(
-                    df[["Name", "Email", "Score", "Matched Keywords"]],
-                    use_container_width=True
-                )
+            # 3.4 Show ranking and useful info
+            st.subheader("Ranked Candidates")
+            st.dataframe(
+                df[["Name", "Email", "Score", "Matched Keywords"]],
+                use_container_width=True
+            )
 
-                # 3.5 Select and email top candidates
-                selected = st.multiselect(
-                    "Select candidates to send interview requests",
-                    df["Email"].tolist()
-                )
-                if st.button("Send Interview Requests"):
-                    for email in selected:
-                        status_df = pd.concat([
-                            status_df,
-                            pd.DataFrame([[email, "Interview Requested"]],
-                                         columns=status_df.columns)
-                        ], ignore_index=True)
-                    status_df.to_csv("data/status.csv", index=False)
-                    st.success(f"Sent {len(selected)} interview request(s).")
-                    st.experimental_rerun()
+            # 3.5 Select and email top candidates
+            selected = st.multiselect(
+                "Select candidates to send interview requests",
+                df["Email"].tolist()
+            )
+            if st.button("Send Interview Requests"):
+                for email in selected:
+                    # <-- Here we now also record the job title -->
+                    status_df = pd.concat([
+                        status_df,
+                        pd.DataFrame([[email,
+                                       "Interview Requested",
+                                       job["Title"]]],
+                                     columns=status_df.columns)
+                    ], ignore_index=True)
+
+                status_df.to_csv("data/status.csv", index=False)
+                st.success(f"Sent {len(selected)} interview request(s) for '{job['Title']}'.")
+                st.experimental_rerun()
 
 # -------------------------------------------------------------------------------
 # 4) Dashboard: track statuses
