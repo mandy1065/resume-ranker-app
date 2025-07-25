@@ -1,7 +1,13 @@
+import os
 import streamlit as st
 import pandas as pd
 from io import StringIO
 from utils.resume_parser import parse_resume
+
+
+# Ensure the data directory exists
+os.makedirs("data", exist_ok=True)
+
 
 st.set_page_config(page_title="Recruiter Portal", layout="wide")
 
