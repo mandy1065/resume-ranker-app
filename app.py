@@ -197,7 +197,6 @@ elif page == "Dashboard":
         st.info("No candidates tracked yet.")
     else:
         st.dataframe(df, use_container_width=True)
-
         st.markdown("---")
         st.subheader("Update Candidate Status")
 
@@ -213,9 +212,12 @@ elif page == "Dashboard":
             submitted = st.form_submit_button("Update Status")
 
             if submitted:
+                # Persist the status change
                 st.session_state.status_df.loc[
                     st.session_state.status_df["Email"] == email_to_update,
                     "Status"
                 ] = new_status
                 st.session_state.status_df.to_csv("data/status.csv", index=False)
                 st.success(f"{email_to_update} updated to {new_status}!")
+                # Force a rerun so the updated table appears immediately
+                st.experimental_rerun()
