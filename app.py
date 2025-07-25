@@ -4,9 +4,28 @@ import os
 import tempfile
 import requests
 
-# ---------- Streamlit Setup ----------
+# ---------- Auth Token from Streamlit Cloud Secrets ----------
+AUTH_TOKEN = st.secrets.get("BRAINYSCOUT_API_TOKEN")
+
+# ---------- API Setup ----------
+API_URL = "https://brainyscout.com/api/rscore"
+
+def parse_resume_via_brainyscout(resume_text, job_description):
+    data = {
+        "resume": resume_text,
+        "jobDescription": job_description,
+        "email": "test@example.com"
+    }
+    headers = {
+        "Authorization": f"Bearer {AUTH_TOKEN}"
+    }
+    response = requests.post(API_URL, data=data, headers=headers)
+    response.raise_for_status()
+    return response.json()
+
+# ---------- Streamlit UI Setup ----------
 st.set_page_config(page_title="Resume Ranker - BrainyScout API", layout="wide")
-st.title("🤖 Resume Ranker with BrainyScout API")
+st.title("🤖 Resume Ranker using BrainyScout")
 
 # ---------- Step 1: Paste Job Description ----------
 st.header("1️⃣ Paste Job Description")
@@ -17,25 +36,13 @@ job_description = st.text_area("Paste Job Description", height=200)
 st.header("2️⃣ Upload Resumes")
 resumes = st.file_uploader("Upload Resumes (TXT format preferred)", type=["txt"], accept_multiple_files=True)
 
-# ---------- API Function ----------
-API_URL = "https://brainyscout.com/api/rscore"
-
-def parse_resume_via_brainyscout(resume_text, job_description):
-    data = {
-        "resume": resume_text,
-        "jobDescription": job_description,
-        "email": "test@example.com"  # Required dummy email
-    }
-    response = requests.post(API_URL, data=data)
-    response.raise_for_status()
-    return response.json()
-
 # ---------- Step 3: Analyze Candidates ----------
 st.header("3️⃣ Analyze Candidates")
-results = []
 
 if st.button("🚀 Analyze"):
-    if not job_description or not job_title:
+    if not AUTH_TOKEN:
+        st.error("❌ API token not found. Please set it in Streamlit Cloud Secrets.")
+    elif not job_description or not job_title:
         st.warning("Please provide job title and description.")
     elif not resumes:
         st.warning("Please upload at least one resume.")
@@ -55,8 +62,6 @@ if st.button("🚀 Analyze"):
                 score = response_data.get("OverallScore", 0)
                 soft_score = response_data.get("SoftSkillScore", 0)
                 hard_score = response_data.get("HardSkillScore", 0)
-                matched_skills = response_data.get("ResumeMatchedHardSkills", "").split(",") + \
-                                 response_data.get("ResumeMatchedSoftSkills", "").split(",")
 
                 result_rows.append({
                     "Candidate": resume_file.name,
@@ -71,6 +76,7 @@ if st.button("🚀 Analyze"):
             finally:
                 os.unlink(tmp_path)
 
-        df_result = pd.DataFrame(result_rows)
-        st.dataframe(df_result, use_container_width=True)
-        st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
+        if result_rows:
+            df_result = pd.DataFrame(result_rows)
+            st.dataframe(df_result, use_container_width=True)
+            st.download_button("📥 Download Results", df_result.to_csv(index=False), "ranked_candidates.csv", "text/csv")
