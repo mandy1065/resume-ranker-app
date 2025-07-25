@@ -1,113 +1,71 @@
-import os
-import json
-import fitz  # PyMuPDF
-import pandas as pd
-import requests
 import streamlit as st
+import pandas as pd
+from utils.resume_parser import parse_resume
+import smtplib
 
+st.set_page_config(page_title="Recruiter Portal", layout="wide")
 
+# Load data
+jobs_df = pd.read_csv("data/jobs.csv")
+candidates_df = pd.read_csv("data/candidates.csv")
+status_df = pd.read_csv("data/status.csv")
 
-# ================== CONFIG ==================
-# Put your real endpoint here
-API_URL = "https://brainyscout.com/api/rscore"  # <-- change if different
+# Sidebar navigation
+st.sidebar.title("Recruiter Portal")
+page = st.sidebar.radio("Go to", ["Post Job", "Upload Resumes", "Rank Candidates", "Dashboard"])
 
-# Read token from Streamlit Secrets (Cloud) or env var (local)
-AUTH_TOKEN = st.secrets.get("BRAINYSCOUT_API_TOKEN") or os.getenv("BRAINYSCOUT_API_TOKEN")
+# Post Job
+if page == "Post Job":
+    st.title("📝 Post a Job")
+    title = st.text_input("Job Title")
+    description = st.text_area("Job Description")
+    location = st.text_input("Location")
+    if st.button("Submit Job"):
+        new_job = pd.DataFrame([[title, description, location]], columns=["Title", "Description", "Location"])
+        jobs_df = pd.concat([jobs_df, new_job], ignore_index=True)
+        jobs_df.to_csv("data/jobs.csv", index=False)
+        st.success("Job posted!")
 
-# ================== HELPERS ==================
-def extract_text_from_pdf(file) -> str:
-    """Return plain text from an uploaded PDF file-like object."""
-    with fitz.open(stream=file.read(), filetype="pdf") as doc:
-        return "\n".join(page.get_text() for page in doc)
+# Upload Resumes
+elif page == "Upload Resumes":
+    st.title("📄 Upload Resumes")
+    uploaded_files = st.file_uploader("Upload multiple resumes", type=["pdf", "docx"], accept_multiple_files=True)
+    if uploaded_files:
+        for file in uploaded_files:
+            parsed = parse_resume(file)
+            candidates_df = pd.concat([candidates_df, pd.DataFrame([parsed])], ignore_index=True)
+        candidates_df.to_csv("data/candidates.csv", index=False)
+        st.success("Resumes uploaded and parsed!")
 
-def score_with_single_api(resume_text: str, job_description: str, functional_title: str) -> dict:
-    """
-    Calls your SINGLE API that takes resume + JD and returns the score/result.
-    Payload is exactly as you showed:
-    {
-        "data": {
-            "resumeText": "...",
-            "jobdescription": "...",
-            "functionaltitle": "..."
-        }
-    }
-    """
-    headers = {"Content-Type": "application/json"}
-    if AUTH_TOKEN:
-        headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
-
-    payload = {
-        "data": {
-            "resumeText": resume_text,
-            "jobdescription": job_description,
-            "functionaltitle": functional_title
-        }
-    }
-
-    resp = requests.post(API_URL, headers=headers, data=json.dumps(payload))
-    resp.raise_for_status()
-    return resp.json()
-
-def flatten(prefix: str, obj: dict, out: dict):
-    """Flatten nested dicts (best-effort) for tabular display."""
-    for k, v in obj.items():
-        key = f"{prefix}{k}" if prefix == "" else f"{prefix}.{k}"
-        if isinstance(v, dict):
-            flatten(key, v, out)
-        else:
-            out[key] = v
-    return out
-
-# ================== UI ==================
-st.set_page_config(page_title="Resume → JD Scorer (Single API)", layout="wide")
-st.title("🤖 PDF Resume → JD Scorer (Single API)")
-
-# ---- Inputs ----
-st.header("1️⃣ Provide Job Inputs")
-functional_title = st.text_input("Functional Title", placeholder="e.g., QA Analyst")
-job_description = st.text_area("Paste Job Description", height=200)
-
-st.header("2️⃣ Upload PDF Resumes")
-pdf_files = st.file_uploader("Upload resumes (PDF only)", type=["pdf"], accept_multiple_files=True)
-
-st.header("3️⃣ Run Scoring")
-if st.button("🚀 Score"):
-    if not functional_title or not job_description:
-        st.warning("Please provide Functional Title and Job Description.")
-    elif not pdf_files:
-        st.warning("Please upload at least one PDF resume.")
+# Rank Candidates
+elif page == "Rank Candidates":
+    st.title("🏆 Ranked Candidates")
+    if jobs_df.empty or candidates_df.empty:
+        st.warning("Please post a job and upload resumes first.")
     else:
-        if not AUTH_TOKEN:
-            st.info("ℹ️ No auth token found. If your API requires one, add it via Streamlit Secrets or env var.")
+        job = jobs_df.iloc[-1]
+        st.write(f"Matching candidates for: **{job['Title']}**")
+        keywords = job["Description"].lower().split()
+        candidates_df["Score"] = candidates_df["Resume Text"].apply(
+            lambda text: sum([text.lower().count(k) for k in keywords])
+        )
+        ranked = candidates_df.sort_values(by="Score", ascending=False)
+        st.dataframe(ranked)
 
-        rows = []
+        selected = st.multiselect("Select candidates to send interview email", ranked["Email"].tolist())
+        if st.button("Send Interview Request"):
+            for email in selected:
+                status_df = pd.concat([status_df, pd.DataFrame([[email, "Interview Requested"]], columns=["Email", "Status"])], ignore_index=True)
+            status_df.to_csv("data/status.csv", index=False)
+            st.success("Interview requests sent!")
 
-        for f in pdf_files:
-            try:
-                resume_text = extract_text_from_pdf(f)
-                api_result = score_with_single_api(resume_text, job_description, functional_title)
-
-                # Prepare a flat row for the table
-                flat = {
-                    "Candidate File": f.name,
-                }
-                if isinstance(api_result, dict):
-                    flat = flatten("", api_result, flat)
-                else:
-                    flat["api_raw"] = str(api_result)
-
-                rows.append(flat)
-
-            except Exception as e:
-                st.error(f"❌ Error with {f.name}: {e}")
-
-        if rows:
-            df = pd.DataFrame(rows)
-            st.subheader("📊 Results")
-            st.dataframe(df, use_container_width=True)
-            st.download_button(
-                "📥 Download CSV",
-                df.to_csv(index=False),
-                file_name="resume_scores.csv",
-                mime="text/csv"
-            )
+# Dashboard
+elif page == "Dashboard":
+    st.title("📊 Candidate Status Dashboard")
+    st.dataframe(status_df)
+    update_email = st.selectbox("Select candidate to update status", status_df["Email"].unique())
+    new_status = st.selectbox("New Status", ["Interview Requested", "Rejected", "Accepted"])
+    if st.button("Update Status"):
+        status_df.loc[status_df["Email"] == update_email, "Status"] = new_status
+        status_df.to_csv("data/status.csv", index=False)
+        st.success("Status updated!")
