@@ -9,7 +9,7 @@ import streamlit as st
 from io import StringIO
 from PyPDF2 import PdfReader
 import docx
-from utils.resume_parser import parse_resume  # you already have this
+from utils.resume_parser import parse_resume  # your existing parser
 
 # -------------------------------------------------------------------
 # Setup & Session State Initialization
@@ -17,6 +17,7 @@ from utils.resume_parser import parse_resume  # you already have this
 os.makedirs("data", exist_ok=True)
 st.set_page_config(page_title="Recruiter Portal", layout="wide")
 
+# Load or init jobs_df
 if "jobs_df" not in st.session_state:
     try:
         st.session_state.jobs_df = pd.read_csv("data/jobs.csv")
@@ -26,6 +27,7 @@ if "jobs_df" not in st.session_state:
         )
         st.session_state.jobs_df.to_csv("data/jobs.csv", index=False)
 
+# Load or init status_df
 if "status_df" not in st.session_state:
     try:
         st.session_state.status_df = pd.read_csv("data/status.csv")
@@ -128,7 +130,6 @@ elif page == "Analyse & Email Candidates":
         format_func=lambda i: st.session_state.jobs_df.at[i, "Title"]
     )
     job = st.session_state.jobs_df.loc[job_idx]
-
     st.write("**Description:**", job["Description"])
     st.write("**Location:**", job["Location"])
     st.markdown("---")
@@ -140,7 +141,7 @@ elif page == "Analyse & Email Candidates":
         accept_multiple_files=True
     )
 
-    # Analyse in a form so the uploader doesn’t reset
+    # Analyse in a form so uploader state persists
     if files:
         with st.form("analyse_form", clear_on_submit=False):
             analyse_btn = st.form_submit_button("Analyse Resumes")
@@ -157,7 +158,7 @@ elif page == "Analyse & Email Candidates":
                 df = df.sort_values("Score", ascending=False)
                 st.session_state.analysis_df = df
 
-    # Show analysis results & allow sending requests
+    # Show ranking & send requests
     if "analysis_df" in st.session_state:
         df = st.session_state.analysis_df
         st.subheader("Ranked Candidates")
@@ -196,14 +197,25 @@ elif page == "Dashboard":
         st.info("No candidates tracked yet.")
     else:
         st.dataframe(df, use_container_width=True)
+
         st.markdown("---")
         st.subheader("Update Candidate Status")
-        email_to_update = st.selectbox("Pick candidate", df["Email"].unique())
-        new_status = st.selectbox(
-            "New status", ["Interview Requested", "Rejected", "Accepted"]
-        )
-        if st.button("Update Status"):
-            df.loc[df["Email"] == email_to_update, "Status"] = new_status
-            st.session_state.status_df = df
-            df.to_csv("data/status.csv", index=False)
-            st.success("Status updated!")
+
+        with st.form("update_status_form", clear_on_submit=False):
+            email_to_update = st.selectbox(
+                "Pick candidate",
+                options=df["Email"].unique()
+            )
+            new_status = st.selectbox(
+                "New status",
+                options=["Interview Requested", "Rejected", "Accepted"]
+            )
+            submitted = st.form_submit_button("Update Status")
+
+            if submitted:
+                st.session_state.status_df.loc[
+                    st.session_state.status_df["Email"] == email_to_update,
+                    "Status"
+                ] = new_status
+                st.session_state.status_df.to_csv("data/status.csv", index=False)
+                st.success(f"{email_to_update} updated to {new_status}!")
