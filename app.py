@@ -464,3 +464,48 @@ elif page == "Dashboard":
                 st.success(f"{email_to_update} updated to {new_status}!")
                 # Force a rerun so the updated table appears immediately
                 st.experimental_rerun()
+
+# --- Resume Chatbot Assistant Feature ---
+import openai
+
+st.markdown("## 🤖 Resume Chat Assistant")
+
+openai.api_key = st.secrets.get("openai_api_key", None)
+if not openai.api_key:
+    st.warning("⚠️ Please set your OpenAI API key in `.streamlit/secrets.toml` as `openai_api_key = 'your-key'`")
+
+resume_chat_text = st.text_area("📄 Paste Resume Text", height=250)
+jd_chat_text = st.text_area("🧾 Job Description (Optional)", height=150)
+
+if st.button("Analyze Resume with ChatGPT"):
+    if not resume_chat_text.strip():
+        st.error("Please paste a resume.")
+    else:
+        st.subheader("📋 Resume Summary")
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a recruiter assistant analyzing resumes."},
+                    {"role": "user", "content": f"Resume:\n{resume_chat_text}\n\nJob Description:\n{jd_chat_text}\n\nPlease give a professional summary."}
+                ]
+            )
+            st.markdown(response.choices[0].message["content"])
+        except Exception as e:
+            st.error(f"OpenAI error: {e}")
+
+    st.subheader("💬 Resume Q&A")
+    question = st.text_input("Ask about this resume")
+    if question:
+        try:
+            qa_response = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You answer recruiter questions based on a resume."},
+                    {"role": "user", "content": f"Resume:\n{resume_chat_text}"},
+                    {"role": "user", "content": f"Question: {question}"}
+                ]
+            )
+            st.markdown(f"**Answer:** {qa_response.choices[0].message['content']}")
+        except Exception as e:
+            st.error(f"OpenAI error: {e}")
