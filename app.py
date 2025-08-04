@@ -467,6 +467,7 @@ elif page == "Dashboard":
 
 
 
+
 # --- Resume Chatbot Assistant Feature (OpenAI SDK >= 1.0.0) ---
 import openai
 
@@ -481,45 +482,46 @@ except Exception:
 resume_chat_text = st.text_area("📄 Paste Resume Text", height=250)
 jd_chat_text = st.text_area("🧾 Job Description (Optional)", height=150)
 
-if st.button("Analyze Resume with ChatGPT"):
-    if not resume_chat_text.strip():
-        st.error("Please paste a resume.")
+# Save system context and user history
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = [
+        {"role": "system", "content": "You are a recruiter assistant answering questions about resumes."},
+        {"role": "user", "content": f"Resume:
+{resume_chat_text}"},
+    ]
+
+if st.button("Reset Chat"):
+    st.session_state.chat_messages = [
+        {"role": "system", "content": "You are a recruiter assistant answering questions about resumes."},
+        {"role": "user", "content": f"Resume:
+{resume_chat_text}"},
+    ]
+    st.experimental_rerun()
+
+st.subheader("💬 Ask Anything About This Resume")
+
+user_question = st.text_input("Type your question here:")
+if st.button("Ask"):
+    if resume_chat_text.strip() == "":
+        st.warning("Please paste a resume before asking.")
+    elif user_question.strip() == "":
+        st.warning("Please enter a question.")
     else:
-        st.subheader("📋 Resume Summary")
+        st.session_state.chat_messages.append({"role": "user", "content": user_question})
         try:
             response = client.chat.completions.create(
                 model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a recruiter assistant analyzing resumes."},
-                    {"role": "user", "content": f"Resume:\n{resume_chat_text}\n\nJob Description:\n{jd_chat_text}\n\nPlease give a professional summary."}
-                ]
+                messages=st.session_state.chat_messages
             )
-            st.markdown(response.choices[0].message.content)
+            answer = response.choices[0].message.content
+            st.session_state.chat_messages.append({"role": "assistant", "content": answer})
         except Exception as e:
-            st.error(f"OpenAI error: {e}")
+            st.error(f"OpenAI Error: {e}")
 
-    st.subheader("💬 Resume Q&A")
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-
-    user_question = st.text_input("Ask about this resume")
-    if user_question:
-        try:
-            qa_response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You answer recruiter questions based on a resume."},
-                    {"role": "user", "content": f"Resume:\n{resume_chat_text}"},
-                    {"role": "user", "content": f"Question: {user_question}"}
-                ]
-            )
-            answer = qa_response.choices[0].message.content
-            st.session_state.chat_history.append((user_question, answer))
-        except Exception as e:
-            st.error(f"OpenAI error: {e}")
-
-    if st.session_state.chat_history:
-        st.markdown("### 🗂️ Chat History")
-        for idx, (q, a) in enumerate(reversed(st.session_state.chat_history), 1):
-            st.markdown(f"**Q{idx}:** {q}")
-            st.markdown(f"**A{idx}:** {a}")
+if len(st.session_state.chat_messages) > 2:
+    st.markdown("### 🧠 Chat History")
+    for msg in st.session_state.chat_messages[2:]:
+        if msg["role"] == "user":
+            st.markdown(f"**🧑 Recruiter:** {msg['content']}")
+        else:
+            st.markdown(f"**🤖 AI:** {msg['content']}")
