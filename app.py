@@ -11,11 +11,87 @@ from PyPDF2 import PdfReader
 import docx
 from utils.resume_parser import parse_resume  # your existing parser
 
+# Third party library for making HTTP requests
+# We import requests here rather than at the top‑level within a function so that
+# the library is only required when the API integration is used.  If you
+# haven't already, ensure `requests` is listed in your requirements.txt.
+import requests
+from requests.auth import HTTPBasicAuth
+
 # -------------------------------------------------------------------
 # Setup & Session State Initialization
 # -------------------------------------------------------------------
 os.makedirs("data", exist_ok=True)
 st.set_page_config(page_title="Recruiter Portal", layout="wide")
+
+# -------------------------------------------------------------------
+# External Resume Scoring API Configuration
+# -------------------------------------------------------------------
+# This application can optionally call an external API to score each resume.
+# The endpoint expects a JSON body with the candidate's resume text, the
+# job description, and the candidate email.  Basic authentication is used to
+# protect the endpoint.  Credentials should be provided via environment
+# variables (API_USERNAME and API_PASSWORD) to avoid hard‑coding secrets.
+#
+# If the API credentials are not configured, the app will fall back to the
+# internal keyword matching logic defined later in the "Analyse & Email
+# Candidates" section.
+API_URL = os.environ.get("RANKER_API_URL", "https://brainyscout.com/api/rscore")
+# Use a pre‑encoded Basic auth token for API authentication.  The token below
+# has been provided directly by the user and will be sent in the
+# Authorization header.  If you wish to override it with an environment
+# variable, set API_AUTH_TOKEN in your environment.
+API_AUTH_TOKEN = os.environ.get("API_AUTH_TOKEN", "xHw1vCqkEUsenEQYriT38Ad1futtKlmu")
+API_USERNAME = None  # Not used when a token is provided
+API_PASSWORD = None  # Not used when a token is provided
+
+def get_resume_score_via_api(resume_text: str, job_description: str, email: str) -> float:
+    """
+    Call an external resume scoring API with the provided details.
+
+    Parameters
+    ----------
+    resume_text : str
+        The full text extracted from a candidate's resume.
+    job_description : str
+        The job description for which resumes are being evaluated.
+    email : str
+        Candidate's email address (used by the API; may be optional depending on implementation).
+
+    Returns
+    -------
+    float
+        The score returned by the API.  If the API fails or does not
+        provide a score, 0.0 is returned.
+    """
+    # Construct payload according to API specification
+    payload = {
+        "resume": resume_text,
+        "jobDescription": job_description,
+        "email": email,
+    }
+    # Prepare authentication.  If a pre‑encoded token is provided, use it in
+    # the Authorization header.  Otherwise, fall back to HTTPBasicAuth when
+    # username and password are available.  If no credentials are supplied, the
+    # request is sent without an Authorization header.
+    auth = None
+    headers = {}
+    if API_AUTH_TOKEN:
+        headers["Authorization"] = f"Basic {API_AUTH_TOKEN}"
+    elif API_USERNAME and API_PASSWORD:
+        auth = HTTPBasicAuth(API_USERNAME, API_PASSWORD)
+    try:
+        response = requests.post(API_URL, json=payload, auth=auth, headers=headers or None, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        # The API might return different field names for the score.  Try common ones.
+        for key in ["score", "rscore", "resumeScore", "ResumeScore"]:
+            if key in data:
+                return float(data[key])
+    except Exception as e:
+        # Log to the console for debugging; the UI will continue gracefully.
+        print(f"Error calling resume score API: {e}")
+    return 0.0
 
 # Load or init jobs_df
 if "jobs_df" not in st.session_state:
@@ -146,15 +222,33 @@ elif page == "Analyse & Email Candidates":
         with st.form("analyse_form", clear_on_submit=False):
             analyse_btn = st.form_submit_button("Analyse Resumes")
             if analyse_btn:
+                # Parse each uploaded resume file to extract name, email and text
                 parsed = [parse_resume(f) for f in files]
                 df = pd.DataFrame(parsed)
+                # Compute matched keywords for transparency
                 keywords = set(job["Description"].lower().split())
-                df["Score"] = df["Resume Text"].apply(
-                    lambda txt: sum(txt.lower().count(k) for k in keywords)
-                )
                 df["Matched Keywords"] = df["Resume Text"].apply(
                     lambda txt: [k for k in keywords if k in txt.lower()]
                 )
+                # Score resumes using external API; fallback to keyword frequency
+                with st.spinner("Scoring resumes via API..."):
+                    scores = []
+                    for _, row in df.iterrows():
+                        # Call external scoring API
+                        api_score = get_resume_score_via_api(
+                            resume_text=row["Resume Text"],
+                            job_description=job["Description"],
+                            email=row["Email"]
+                        )
+                        # If the API returns a falsy value (0, None, etc.),
+                        # fall back to counting keyword occurrences
+                        if api_score:
+                            scores.append(api_score)
+                        else:
+                            fallback = sum(row["Resume Text"].lower().count(k) for k in keywords)
+                            scores.append(fallback)
+                df["Score"] = scores
+                # Sort candidates by score descending
                 df = df.sort_values("Score", ascending=False)
                 st.session_state.analysis_df = df
 
