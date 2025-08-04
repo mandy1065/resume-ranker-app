@@ -22,9 +22,15 @@ from utils.resume_parser import parse_resume  # your existing parser
 # A small set of common words to exclude when parsing skills.  This list
 # eliminates generic connectors and prepositions; you can expand it as needed.
 COMMON_WORDS = {
+    # Generic stopwords and connectives
     "and", "or", "the", "to", "a", "an", "with", "in", "of", "for",
     "on", "as", "by", "is", "are", "be", "will", "you", "your",
-    "we", "our", "they", "their", "it", "this", "that", "from"
+    "we", "our", "they", "their", "it", "this", "that", "from",
+    # Generic job posting terms to exclude from skill tokens
+    "years", "year", "yrs", "experience", "responsibilities", "responsibility",
+    "skills", "requirements", "must", "have", "strong", "solid", "familiar",
+    "familiarity", "communication", "problem", "solving", "problem‑solving",
+    "team", "summary", "apply"
 }
 
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -43,12 +49,20 @@ def extract_job_skills(description: str) -> list:
     seen = set()
     for token in tokens:
         # Remove any surrounding punctuation
-        tok = re.sub(r"[^a-zA-Z0-9.+_-]", "", token).strip()
-        if not tok or tok in COMMON_WORDS:
+        tok = re.sub(r"[^a-zA-Z0-9.+_-]", "", token).strip().strip('.')
+        # Skip empty tokens
+        if not tok:
             continue
-        if tok not in seen:
-            clean.append(tok)
-            seen.add(tok)
+        # Skip tokens containing any digits (to avoid '5+', '3yrs', etc.)
+        if re.search(r"\d", tok):
+            continue
+        # Normalize plus signs (e.g., C++ becomes c++)
+        tok_lower = tok.lower()
+        if tok_lower in COMMON_WORDS:
+            continue
+        if tok_lower not in seen:
+            clean.append(tok_lower)
+            seen.add(tok_lower)
     return clean
 
 def extract_resume_skills(resume_text: str, job_tokens: list) -> list:
