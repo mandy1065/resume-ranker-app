@@ -466,6 +466,7 @@ elif page == "Dashboard":
                 st.experimental_rerun()
 
 
+
 # --- Resume Chatbot Assistant Feature (OpenAI SDK >= 1.0.0) ---
 import openai
 
@@ -498,17 +499,27 @@ if st.button("Analyze Resume with ChatGPT"):
             st.error(f"OpenAI error: {e}")
 
     st.subheader("💬 Resume Q&A")
-    question = st.text_input("Ask about this resume")
-    if question:
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    user_question = st.text_input("Ask about this resume")
+    if user_question:
         try:
             qa_response = client.chat.completions.create(
                 model="gpt-4",
                 messages=[
                     {"role": "system", "content": "You answer recruiter questions based on a resume."},
                     {"role": "user", "content": f"Resume:\n{resume_chat_text}"},
-                    {"role": "user", "content": f"Question: {question}"}
+                    {"role": "user", "content": f"Question: {user_question}"}
                 ]
             )
-            st.markdown(f"**Answer:** {qa_response.choices[0].message.content}")
+            answer = qa_response.choices[0].message.content
+            st.session_state.chat_history.append((user_question, answer))
         except Exception as e:
             st.error(f"OpenAI error: {e}")
+
+    if st.session_state.chat_history:
+        st.markdown("### 🗂️ Chat History")
+        for idx, (q, a) in enumerate(reversed(st.session_state.chat_history), 1):
+            st.markdown(f"**Q{idx}:** {q}")
+            st.markdown(f"**A{idx}:** {a}")
