@@ -19,6 +19,64 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 # -------------------------------------------------------------------
+# Skill Extraction Utilities
+# -------------------------------------------------------------------
+# To align the resume text and job description with the requirements of the
+# external API, we extract only the skills (keywords) from both the job
+# description and the resumes.  The API will receive these comma‑delimited
+# skills strings instead of the full text.
+
+# A small set of common words to exclude when parsing skills.  This list
+# eliminates generic connectors and prepositions; you can expand it as needed.
+COMMON_WORDS = {
+    "and", "or", "the", "to", "a", "an", "with", "in", "of", "for",
+    "on", "as", "by", "is", "are", "be", "will", "you", "your",
+    "we", "our", "they", "their", "it", "this", "that", "from"
+}
+
+def extract_job_skills(description: str) -> list:
+    """Extract potential skill tokens from a job description.
+
+    This function splits the job description on commas, slashes, whitespace
+    and newlines, lowercases each token, strips punctuation, and filters
+    out common words.  Duplicate skills are removed while preserving order.
+    """
+    # Replace various separators with spaces, then split
+    tokens = re.split(r"[\s,\n\/\\]+", description.lower())
+    clean = []
+    seen = set()
+    for token in tokens:
+        # Remove any surrounding punctuation
+        tok = re.sub(r"[^a-zA-Z0-9.+_-]", "", token).strip()
+        if not tok or tok in COMMON_WORDS:
+            continue
+        if tok not in seen:
+            clean.append(tok)
+            seen.add(tok)
+    return clean
+
+def extract_resume_skills(resume_text: str, job_tokens: list) -> list:
+    """Return the subset of job_tokens that appear in the resume text.
+
+    Parameters
+    ----------
+    resume_text : str
+        The full text extracted from the resume.
+    job_tokens : list
+        Tokens extracted from the job description to look for.
+    Returns
+    -------
+    list
+        Unique tokens from job_tokens that are present in the resume (order preserved).
+    """
+    text_lower = resume_text.lower()
+    matched = []
+    for token in job_tokens:
+        if token in text_lower:
+            matched.append(token)
+    return matched
+
+# -------------------------------------------------------------------
 # Setup & Session State Initialization
 # -------------------------------------------------------------------
 os.makedirs("data", exist_ok=True)
@@ -41,7 +99,7 @@ API_URL = os.environ.get("RANKER_API_URL", "https://brainyscout.com/api/rscore")
 # has been provided directly by the user and will be sent in the
 # Authorization header.  If you wish to override it with an environment
 # variable, set API_AUTH_TOKEN in your environment.
-API_AUTH_TOKEN = os.environ.get("API_AUTH_TOKEN", "xHw1vCqkEUsenEQYriT38Ad1futtKlmu")
+API_AUTH_TOKEN = os.environ.get("API_AUTH_TOKEN", "xHw1vCqkEUwerwerwe")
 API_USERNAME = None  # Not used when a token is provided
 API_PASSWORD = None  # Not used when a token is provided
 
@@ -225,27 +283,30 @@ elif page == "Analyse & Email Candidates":
                 # Parse each uploaded resume file to extract name, email and text
                 parsed = [parse_resume(f) for f in files]
                 df = pd.DataFrame(parsed)
-                # Compute matched keywords for transparency
-                keywords = set(job["Description"].lower().split())
-                df["Matched Keywords"] = df["Resume Text"].apply(
-                    lambda txt: [k for k in keywords if k in txt.lower()]
+                # Extract the set of skills from the selected job description
+                job_tokens = extract_job_skills(job["Description"])
+                job_skills_str = ",".join(job_tokens)
+                # Determine which of the job skills appear in each resume
+                df["Matched Skills"] = df.apply(
+                    lambda row: extract_resume_skills(row["Resume Text"], job_tokens), axis=1
                 )
                 # Score resumes using external API; fallback to keyword frequency
                 with st.spinner("Scoring resumes via API..."):
                     scores = []
                     for _, row in df.iterrows():
-                        # Call external scoring API
+                        resume_skills_str = ",".join(row["Matched Skills"]) if row["Matched Skills"] else ""
+                        # Call external scoring API using only skills strings
                         api_score = get_resume_score_via_api(
-                            resume_text=row["Resume Text"],
-                            job_description=job["Description"],
+                            resume_text=resume_skills_str,
+                            job_description=job_skills_str,
                             email=row["Email"]
                         )
                         # If the API returns a falsy value (0, None, etc.),
-                        # fall back to counting keyword occurrences
+                        # fall back to counting occurrences of skills in the resume
                         if api_score:
                             scores.append(api_score)
                         else:
-                            fallback = sum(row["Resume Text"].lower().count(k) for k in keywords)
+                            fallback = sum(row["Resume Text"].lower().count(tok) for tok in job_tokens)
                             scores.append(fallback)
                 df["Score"] = scores
                 # Sort candidates by score descending
@@ -257,7 +318,7 @@ elif page == "Analyse & Email Candidates":
         df = st.session_state.analysis_df
         st.subheader("Ranked Candidates")
         st.dataframe(
-            df[["Name", "Email", "Score", "Matched Keywords"]],
+            df[["Name", "Email", "Score", "Matched Skills"]],
             use_container_width=True
         )
 
