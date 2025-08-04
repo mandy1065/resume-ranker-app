@@ -11,13 +11,6 @@ from PyPDF2 import PdfReader
 import docx
 from utils.resume_parser import parse_resume  # your existing parser
 
-# Third party library for making HTTP requests
-# We import requests here rather than at the top‑level within a function so that
-# the library is only required when the API integration is used.  If you
-# haven't already, ensure `requests` is listed in your requirements.txt.
-import requests
-from requests.auth import HTTPBasicAuth
-
 # -------------------------------------------------------------------
 # Skill Extraction Utilities
 # -------------------------------------------------------------------
@@ -33,6 +26,9 @@ COMMON_WORDS = {
     "on", "as", "by", "is", "are", "be", "will", "you", "your",
     "we", "our", "they", "their", "it", "this", "that", "from"
 }
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 def extract_job_skills(description: str) -> list:
     """Extract potential skill tokens from a job description.
@@ -77,79 +73,47 @@ def extract_resume_skills(resume_text: str, job_tokens: list) -> list:
     return matched
 
 # -------------------------------------------------------------------
+# Additional Feature Extraction Helpers
+# -------------------------------------------------------------------
+def parse_required_years(description: str) -> int:
+    """Extract the first occurrence of a years‑of‑experience requirement from a job description."""
+    m = re.search(r"(\d+)\s*(?:\+)?\s*(?:years|yrs)", description.lower())
+    return int(m.group(1)) if m else 0
+
+def parse_resume_years(text: str) -> int:
+    """Estimate the candidate's experience (in years) from the resume text.
+
+    This function searches for patterns like '5 years' or '3 yrs' and returns
+    the maximum value found.  It's a heuristic and may not capture all cases.
+    """
+    years = [int(num) for num in re.findall(r"(\d+)\s*(?:years|yrs)", text.lower())]
+    return max(years) if years else 0
+
+def has_degree(text: str) -> bool:
+    """Check if the resume mentions a degree or certification."""
+    t = text.lower()
+    degree_keywords = [
+        "bachelor", "bachelors", "master", "masters", "phd", "associate",
+        "degree", "certification", "certificate"
+    ]
+    return any(keyword in t for keyword in degree_keywords)
+
+# -------------------------------------------------------------------
 # Setup & Session State Initialization
 # -------------------------------------------------------------------
 os.makedirs("data", exist_ok=True)
 st.set_page_config(page_title="Recruiter Portal", layout="wide")
 
 # -------------------------------------------------------------------
-# External Resume Scoring API Configuration
+# External Resume Scoring API Configuration Removed
 # -------------------------------------------------------------------
-# This application can optionally call an external API to score each resume.
-# The endpoint expects a JSON body with the candidate's resume text, the
-# job description, and the candidate email.  Basic authentication is used to
-# protect the endpoint.  Credentials should be provided via environment
-# variables (API_USERNAME and API_PASSWORD) to avoid hard‑coding secrets.
-#
-# If the API credentials are not configured, the app will fall back to the
-# internal keyword matching logic defined later in the "Analyse & Email
-# Candidates" section.
-API_URL = os.environ.get("RANKER_API_URL", "https://brainyscout.com/api/rscore")
-# Use a pre‑encoded Basic auth token for API authentication.  The token below
-# has been provided directly by the user and will be sent in the
-# Authorization header.  If you wish to override it with an environment
-# variable, set API_AUTH_TOKEN in your environment.
-API_AUTH_TOKEN = os.environ.get("API_AUTH_TOKEN", "xHw1vCqkEUwerwerwe")
-API_USERNAME = None  # Not used when a token is provided
-API_PASSWORD = None  # Not used when a token is provided
+# The earlier version of this application included a call to an external API to
+# compute resume scores.  At the user's request, the API integration has been
+# removed and the app now evaluates candidates using internal logic based on
+# skills extracted from job descriptions and resumes.
 
-def get_resume_score_via_api(resume_text: str, job_description: str, email: str) -> float:
-    """
-    Call an external resume scoring API with the provided details.
-
-    Parameters
-    ----------
-    resume_text : str
-        The full text extracted from a candidate's resume.
-    job_description : str
-        The job description for which resumes are being evaluated.
-    email : str
-        Candidate's email address (used by the API; may be optional depending on implementation).
-
-    Returns
-    -------
-    float
-        The score returned by the API.  If the API fails or does not
-        provide a score, 0.0 is returned.
-    """
-    # Construct payload according to API specification
-    payload = {
-        "resume": resume_text,
-        "jobDescription": job_description,
-        "email": email,
-    }
-    # Prepare authentication.  If a pre‑encoded token is provided, use it in
-    # the Authorization header.  Otherwise, fall back to HTTPBasicAuth when
-    # username and password are available.  If no credentials are supplied, the
-    # request is sent without an Authorization header.
-    auth = None
-    headers = {}
-    if API_AUTH_TOKEN:
-        headers["Authorization"] = f"Basic {API_AUTH_TOKEN}"
-    elif API_USERNAME and API_PASSWORD:
-        auth = HTTPBasicAuth(API_USERNAME, API_PASSWORD)
-    try:
-        response = requests.post(API_URL, json=payload, auth=auth, headers=headers or None, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        # The API might return different field names for the score.  Try common ones.
-        for key in ["score", "rscore", "resumeScore", "ResumeScore"]:
-            if key in data:
-                return float(data[key])
-    except Exception as e:
-        # Log to the console for debugging; the UI will continue gracefully.
-        print(f"Error calling resume score API: {e}")
-    return 0.0
+# The external resume scoring function has been removed because the API is no
+# longer used.  Resume ranking is now handled internally via skill matching.
 
 # Load or init jobs_df
 if "jobs_df" not in st.session_state:
@@ -290,25 +254,78 @@ elif page == "Analyse & Email Candidates":
                 df["Matched Skills"] = df.apply(
                     lambda row: extract_resume_skills(row["Resume Text"], job_tokens), axis=1
                 )
-                # Score resumes using external API; fallback to keyword frequency
-                with st.spinner("Scoring resumes via API..."):
+                # Compute multiple features for each resume and combine them into a composite score.
+                # Feature list:
+                # 1. Skill match ratio: proportion of required skills present in the resume.
+                # 2. Semantic similarity: TF‑IDF cosine similarity between job description and resume.
+                # 3. Title similarity: TF‑IDF cosine similarity between job title and resume.
+                # 4. Experience alignment: ratio of candidate experience to required experience (capped at 1).
+                # 5. Education match: binary indicator if resume mentions a degree or certification.
+                # The final score uses weights inspired by common recruiting heuristics.
+                with st.spinner("Evaluating candidates..."):
                     scores = []
-                    for _, row in df.iterrows():
-                        resume_skills_str = ",".join(row["Matched Skills"]) if row["Matched Skills"] else ""
-                        # Call external scoring API using only skills strings
-                        api_score = get_resume_score_via_api(
-                            resume_text=resume_skills_str,
-                            job_description=job_skills_str,
-                            email=row["Email"]
-                        )
-                        # If the API returns a falsy value (0, None, etc.),
-                        # fall back to counting occurrences of skills in the resume
-                        if api_score:
-                            scores.append(api_score)
+                    analyses = []
+                    # Precompute required years and education requirement from job description
+                    required_years = parse_required_years(job["Description"])
+                    job_requires_degree = any(word in job["Description"].lower() for word in ["bachelor", "master", "degree", "certification"])
+                    # Semantic similarity: job description vs resumes
+                    docs_semantic = [job["Description"]] + df["Resume Text"].tolist()
+                    vectorizer_sem = TfidfVectorizer(stop_words="english")
+                    tfidf_sem = vectorizer_sem.fit_transform(docs_semantic)
+                    sem_job_vec = tfidf_sem[0]
+                    sem_resume_vecs = tfidf_sem[1:]
+                    sem_similarities = cosine_similarity(sem_job_vec, sem_resume_vecs)[0]
+                    # Title similarity: job title vs resumes
+                    docs_title = [job["Title"]] + df["Resume Text"].tolist()
+                    vectorizer_title = TfidfVectorizer(stop_words="english")
+                    tfidf_title = vectorizer_title.fit_transform(docs_title)
+                    title_job_vec = tfidf_title[0]
+                    title_resume_vecs = tfidf_title[1:]
+                    title_similarities = cosine_similarity(title_job_vec, title_resume_vecs)[0]
+                    for idx, (_, row) in enumerate(df.iterrows()):
+                        matched_skills = row["Matched Skills"]
+                        # 1. Skill match ratio
+                        skill_ratio = (len(matched_skills) / len(job_tokens)) if job_tokens else 0.0
+                        # 2. Semantic similarity
+                        semantic_sim = float(sem_similarities[idx])
+                        # 3. Title similarity
+                        title_sim = float(title_similarities[idx])
+                        # 4. Experience alignment
+                        candidate_years = parse_resume_years(row["Resume Text"])
+                        if required_years > 0:
+                            experience_ratio = min(candidate_years / required_years, 1.0)
                         else:
-                            fallback = sum(row["Resume Text"].lower().count(tok) for tok in job_tokens)
-                            scores.append(fallback)
+                            experience_ratio = 1.0  # no requirement means full score
+                        # 5. Education match
+                        candidate_has_degree = has_degree(row["Resume Text"])
+                        if job_requires_degree:
+                            education_match = 1.0 if candidate_has_degree else 0.0
+                        else:
+                            # if job does not require a degree, treat as full score
+                            education_match = 1.0
+                        # Combine features using weights (summing to 1)
+                        score = (
+                            0.40 * skill_ratio +
+                            0.20 * semantic_sim +
+                            0.15 * experience_ratio +
+                            0.10 * title_sim +
+                            0.10 * education_match +
+                            0.05 * 1.0  # placeholder for location fit (not available)
+                        )
+                        scores.append(score)
+                        # Build analysis message summarizing each feature
+                        analysis_parts = [
+                            f"Skills matched: {len(matched_skills)}/{len(job_tokens)}",
+                            f"Semantic sim: {semantic_sim:.2f}",
+                            f"Title sim: {title_sim:.2f}",
+                            f"Experience: {candidate_years}/{required_years if required_years else 'n/a'}",
+                            f"Degree match: {'Y' if candidate_has_degree else 'N'}"
+                        ]
+                        if matched_skills:
+                            analysis_parts.append(f"Matched skills: {', '.join(matched_skills)}")
+                        analyses.append(" | ".join(analysis_parts))
                 df["Score"] = scores
+                df["Analysis"] = analyses
                 # Sort candidates by score descending
                 df = df.sort_values("Score", ascending=False)
                 st.session_state.analysis_df = df
@@ -318,7 +335,7 @@ elif page == "Analyse & Email Candidates":
         df = st.session_state.analysis_df
         st.subheader("Ranked Candidates")
         st.dataframe(
-            df[["Name", "Email", "Score", "Matched Skills"]],
+            df[["Name", "Email", "Score", "Matched Skills", "Analysis"]],
             use_container_width=True
         )
 
