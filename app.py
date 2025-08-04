@@ -246,6 +246,13 @@ elif page == "Analyse & Email Candidates":
     st.write("**Location:**", job["Location"])
     st.markdown("---")
 
+    # Recruiter-defined skills and weights
+    st.subheader("Define Key Skills & Weights (Optional)")
+    st.write("Enter a comma-separated list of skills and corresponding weights. "
+             "Weights can be any numbers; they will be normalized automatically.")
+    skills_input = st.text_input("Desired skills (comma-separated)", key="skills_input")
+    weights_input = st.text_input("Weights (comma-separated, same order)", key="weights_input")
+
     # Upload resumes
     files = st.file_uploader(
         "Upload multiple resumes",
@@ -263,86 +270,117 @@ elif page == "Analyse & Email Candidates":
                 df = pd.DataFrame(parsed)
                 # Extract the set of skills from the selected job description
                 job_tokens = extract_job_skills(job["Description"])
-                job_skills_str = ",".join(job_tokens)
                 # Determine which of the job skills appear in each resume
                 df["Matched Skills"] = df.apply(
                     lambda row: extract_resume_skills(row["Resume Text"], job_tokens), axis=1
                 )
-                # Compute multiple features for each resume and combine them into a composite score.
-                # Feature list:
-                # 1. Skill match ratio: proportion of required skills present in the resume.
-                # 2. Semantic similarity: TF‑IDF cosine similarity between job description and resume.
-                # 3. Title similarity: TF‑IDF cosine similarity between job title and resume.
-                # 4. Experience alignment: ratio of candidate experience to required experience (capped at 1).
-                # 5. Education match: binary indicator if resume mentions a degree or certification.
-                # The final score uses weights inspired by common recruiting heuristics.
-                with st.spinner("Evaluating candidates..."):
-                    scores = []
-                    analyses = []
-                    # Precompute required years and education requirement from job description
-                    required_years = parse_required_years(job["Description"])
-                    job_requires_degree = any(word in job["Description"].lower() for word in ["bachelor", "master", "degree", "certification"])
-                    # Semantic similarity: job description vs resumes
-                    docs_semantic = [job["Description"]] + df["Resume Text"].tolist()
-                    vectorizer_sem = TfidfVectorizer(stop_words="english")
-                    tfidf_sem = vectorizer_sem.fit_transform(docs_semantic)
-                    sem_job_vec = tfidf_sem[0]
-                    sem_resume_vecs = tfidf_sem[1:]
-                    sem_similarities = cosine_similarity(sem_job_vec, sem_resume_vecs)[0]
-                    # Title similarity: job title vs resumes
-                    docs_title = [job["Title"]] + df["Resume Text"].tolist()
-                    vectorizer_title = TfidfVectorizer(stop_words="english")
-                    tfidf_title = vectorizer_title.fit_transform(docs_title)
-                    title_job_vec = tfidf_title[0]
-                    title_resume_vecs = tfidf_title[1:]
-                    title_similarities = cosine_similarity(title_job_vec, title_resume_vecs)[0]
-                    for idx, (_, row) in enumerate(df.iterrows()):
-                        matched_skills = row["Matched Skills"]
-                        # 1. Skill match ratio
-                        skill_ratio = (len(matched_skills) / len(job_tokens)) if job_tokens else 0.0
-                        # 2. Semantic similarity
-                        semantic_sim = float(sem_similarities[idx])
-                        # 3. Title similarity
-                        title_sim = float(title_similarities[idx])
-                        # 4. Experience alignment
-                        candidate_years = parse_resume_years(row["Resume Text"])
-                        if required_years > 0:
-                            experience_ratio = min(candidate_years / required_years, 1.0)
-                        else:
-                            experience_ratio = 1.0  # no requirement means full score
-                        # 5. Education match
-                        candidate_has_degree = has_degree(row["Resume Text"])
-                        if job_requires_degree:
-                            education_match = 1.0 if candidate_has_degree else 0.0
-                        else:
-                            # if job does not require a degree, treat as full score
-                            education_match = 1.0
-                        # Combine features using weights (summing to 1)
-                        score = (
-                            0.40 * skill_ratio +
-                            0.20 * semantic_sim +
-                            0.15 * experience_ratio +
-                            0.10 * title_sim +
-                            0.10 * education_match +
-                            0.05 * 1.0  # placeholder for location fit (not available)
-                        )
-                        scores.append(score)
-                        # Build analysis message summarizing each feature
-                        analysis_parts = [
-                            f"Skills matched: {len(matched_skills)}/{len(job_tokens)}",
-                            f"Semantic sim: {semantic_sim:.2f}",
-                            f"Title sim: {title_sim:.2f}",
-                            f"Experience: {candidate_years}/{required_years if required_years else 'n/a'}",
-                            f"Degree match: {'Y' if candidate_has_degree else 'N'}"
-                        ]
-                        if matched_skills:
-                            analysis_parts.append(f"Matched skills: {', '.join(matched_skills)}")
-                        analyses.append(" | ".join(analysis_parts))
-                df["Score"] = scores
-                df["Analysis"] = analyses
-                # Sort candidates by score descending
-                df = df.sort_values("Score", ascending=False)
-                st.session_state.analysis_df = df
+
+                # Parse recruiter-defined skills and weights
+                user_skills = [s.strip().lower() for s in skills_input.split(",") if s.strip()]
+                user_weights_raw = [w.strip() for w in weights_input.split(",") if w.strip()]
+                user_weights = []
+                if user_skills:
+                    try:
+                        user_weights = [float(w) for w in user_weights_raw]
+                    except ValueError:
+                        st.error("Weights must be numeric values.")
+                        st.stop()
+                    if len(user_weights) != len(user_skills):
+                        st.error("The number of skills and weights must match.")
+                        st.stop()
+                    # Normalize weights to sum to 1
+                    total_w = sum(user_weights)
+                    if total_w == 0:
+                        st.error("At least one weight must be greater than zero.")
+                        st.stop()
+                    user_weights = [w / total_w for w in user_weights]
+
+                # If recruiter provided skills, compute weighted skill scores and rank accordingly
+                if user_skills:
+                    weighted_scores = []
+                    matched_user_skills = []
+                    for _, row in df.iterrows():
+                        resume_lower = row["Resume Text"].lower()
+                        score = 0.0
+                        matched = []
+                        for skill, weight in zip(user_skills, user_weights):
+                            if skill and skill in resume_lower:
+                                score += weight
+                                matched.append(skill)
+                        weighted_scores.append(score)
+                        matched_user_skills.append(matched)
+                    df["Score"] = weighted_scores
+                    df["Matched Skills"] = matched_user_skills
+                    df["Analysis"] = df["Matched Skills"].apply(
+                        lambda skills: f"Weighted skill hits: {len(skills)}/{len(user_skills)} | Skills: {', '.join(skills)}" if skills else f"Weighted skill hits: 0/{len(user_skills)}"
+                    )
+                    df = df.sort_values("Score", ascending=False)
+                    st.session_state.analysis_df = df
+                else:
+                    # No recruiter-defined skills; use composite scoring based on job description
+                    with st.spinner("Evaluating candidates..."):
+                        scores = []
+                        analyses = []
+                        # Precompute required years and education requirement from job description
+                        required_years = parse_required_years(job["Description"])
+                        job_requires_degree = any(word in job["Description"].lower() for word in ["bachelor", "master", "degree", "certification"])
+                        # Semantic similarity: job description vs resumes
+                        docs_semantic = [job["Description"]] + df["Resume Text"].tolist()
+                        vectorizer_sem = TfidfVectorizer(stop_words="english")
+                        tfidf_sem = vectorizer_sem.fit_transform(docs_semantic)
+                        sem_job_vec = tfidf_sem[0]
+                        sem_resume_vecs = tfidf_sem[1:]
+                        sem_similarities = cosine_similarity(sem_job_vec, sem_resume_vecs)[0]
+                        # Title similarity: job title vs resumes
+                        docs_title = [job["Title"]] + df["Resume Text"].tolist()
+                        vectorizer_title = TfidfVectorizer(stop_words="english")
+                        tfidf_title = vectorizer_title.fit_transform(docs_title)
+                        title_job_vec = tfidf_title[0]
+                        title_resume_vecs = tfidf_title[1:]
+                        title_similarities = cosine_similarity(title_job_vec, title_resume_vecs)[0]
+                        for idx, (_, row) in enumerate(df.iterrows()):
+                            matched_skills = row["Matched Skills"]
+                            # 1. Skill match ratio
+                            skill_ratio = (len(matched_skills) / len(job_tokens)) if job_tokens else 0.0
+                            # 2. Semantic similarity
+                            semantic_sim = float(sem_similarities[idx])
+                            # 3. Title similarity
+                            title_sim = float(title_similarities[idx])
+                            # 4. Experience alignment
+                            candidate_years = parse_resume_years(row["Resume Text"])
+                            if required_years > 0:
+                                experience_ratio = min(candidate_years / required_years, 1.0)
+                            else:
+                                experience_ratio = 1.0
+                            # 5. Education match
+                            candidate_has_degree = has_degree(row["Resume Text"])
+                            if job_requires_degree:
+                                education_match = 1.0 if candidate_has_degree else 0.0
+                            else:
+                                education_match = 1.0
+                            score = (
+                                0.40 * skill_ratio +
+                                0.20 * semantic_sim +
+                                0.15 * experience_ratio +
+                                0.10 * title_sim +
+                                0.10 * education_match +
+                                0.05 * 1.0
+                            )
+                            scores.append(score)
+                            analysis_parts = [
+                                f"Skills matched: {len(matched_skills)}/{len(job_tokens)}",
+                                f"Semantic sim: {semantic_sim:.2f}",
+                                f"Title sim: {title_sim:.2f}",
+                                f"Experience: {candidate_years}/{required_years if required_years else 'n/a'}",
+                                f"Degree match: {'Y' if candidate_has_degree else 'N'}"
+                            ]
+                            if matched_skills:
+                                analysis_parts.append(f"Matched skills: {', '.join(matched_skills)}")
+                            analyses.append(" | ".join(analysis_parts))
+                    df["Score"] = scores
+                    df["Analysis"] = analyses
+                    df = df.sort_values("Score", ascending=False)
+                    st.session_state.analysis_df = df
 
     # Show ranking & send requests
     if "analysis_df" in st.session_state:
