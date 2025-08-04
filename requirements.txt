@@ -1,6 +1,7 @@
-
 streamlit
 pandas
-PyPDF2
-python-docx
 scikit-learn
+spacy
+python-docx
+PyPDF2
+openai
